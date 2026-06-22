@@ -1,0 +1,90 @@
+INSTRUCCIONES DE INSTALACION Y EJECUCION
+HERITAGE DAMAGE DETECTOR v4.2
+Universidad Catolica de Santa Maria
+
+REQUISITOS PREVIOS:
+1. Tener Python 3.8 o superior instalado
+2. Tener el archivo best.pt (modelo entrenado)
+3. Conexión a internet para Supabase
+
+PASOS DE INSTALACION:
+
+Paso 1: Instalar Python
+- Descargue Python desde https://www.python.org/downloads/
+- Durante la instalación, marque la opción "Add Python to PATH"
+- Verifique la instalación abriendo CMD y escribiendo: python --version
+
+Paso 2: Preparar la carpeta del proyecto
+- Cree una carpeta nueva en su computadora (ej: Heritage_Detector)
+- Copie todos los archivos en esta carpeta:
+  * app.py
+  * best.pt (modelo entrenado)
+  * requirements.txt
+  * Este archivo de instrucciones
+
+Paso 3: Instalar dependencias
+- Abra la terminal o CMD en la carpeta del proyecto
+- Ejecute: pip install -r requirements.txt
+- Espere a que se instalen todas las librerías (puede tomar 5-10 minutos)
+
+Paso 4: Configurar base de datos (Supabase)
+- Vaya a https://supabase.com y cree una cuenta gratuita
+- Cree un nuevo proyecto
+- Copie la URL del proyecto y la clave API
+- En el archivo app.py, busque las líneas:
+  SUPABASE_URL = "https://gosywjlocfoettpzafga.supabase.co"
+  SUPABASE_KEY = "sb_publishable_..."
+- Reemplace con sus propias credenciales
+- En Supabase, vaya a SQL Editor y ejecute el script SQL proporcionado
+
+Paso 5: Ejecutar la aplicación
+- En la terminal, dentro de la carpeta del proyecto, ejecute:
+  streamlit run app.py
+- Se abrirá automáticamente el navegador en http://localhost:8501
+
+COMO USAR LA APLICACION:
+
+1. Analisis en Campo:
+   - Suba una o varias imágenes del monumento
+   - Haga clic en "INICIAR PROCESAMIENTO"
+   - Espere a que se analicen todas las imágenes
+   - Revise los resultados (detecciones, áreas, confianza)
+   - Opcional: Guarde en base de datos haciendo clic en "Guardar resultados en Supabase"
+   - Opcional: Descargue el reporte en CSV
+
+2. Cuadro de Mandos:
+   - Visualice estadísticas consolidadas de las imágenes procesadas
+   - Gráficos de distribución de daños
+   - Resumen por imagen
+
+3. Historial en Base de Datos:
+   - Consulte todas las inspecciones guardadas previamente
+   - Filtre por fecha
+   - Visualice tendencias temporales
+
+4. Especificacion Tecnica:
+   - Documentación técnica del sistema
+   - Parámetros del modelo
+   - Referencias para sustentación
+
+SOLUCION DE PROBLEMAS:
+
+Error: "Modelo no encontrado"
+- Asegúrese de que best.pt esté en la misma carpeta que app.py
+
+Error: "No hay conexión con Supabase"
+- Verifique que las credenciales en app.py sean correctas
+- Verifique que tenga conexión a internet
+- Verifique que haya ejecutado el script SQL en Supabase
+
+Error: "ModuleNotFoundError"
+- Ejecute nuevamente: pip install -r requirements.txt
+- Si persiste, instale cada librería individualmente
+
+La aplicación es lenta
+- Es normal la primera vez que carga el modelo
+- Las imágenes grandes tardan más en procesarse
+- Active/desactive "Multi-scale inference" según necesite
+
+CONTACTO:
+Para dudas o soporte técnico, contactar al desarrollador del proyecto.
