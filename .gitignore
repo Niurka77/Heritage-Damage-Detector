@@ -1,16 +1,3 @@
-<<<<<<< HEAD
-.env
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-=======
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -229,4 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
->>>>>>> 88ce072043938cdaf38f0b31e4109cb489b9ad28
+
+# Salida local de analisis
+resultados/

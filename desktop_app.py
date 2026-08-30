@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-desktop_app.py - Heritage Damage Detector v6.4 DESKTOP EDITION
+desktop_app.py - Heritage Damage Detector v6.5 DESKTOP EDITION
 Universidad Católica de Santa María - Arequipa, Perú
 Aplicación de escritorio nativa con CustomTkinter + Supabase
 Motor: Tiling + NMS + Filtros Geométricos + Anti-sombras
+v6.5: Hover interactivo + Clasificación de gravedad + Priorización
 """
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
+import tkinter as tk
 from PIL import Image, ImageTk
+from alerts_system import AlertSystem
 from ultralytics import YOLO
 import cv2
 import numpy as np
@@ -20,6 +23,7 @@ from matplotlib.figure import Figure
 from datetime import datetime
 import os
 import json
+import re
 import time
 import torch
 import requests
@@ -27,6 +31,69 @@ import threading
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
+
+# Intentar importar detection_gravity (si existe)
+try:
+    from detection_gravity import enrich_detections_with_gravity, generate_priority_report, GRAVITY_COLORS
+    GRAVITY_MODULE_AVAILABLE = True
+except ImportError:
+    GRAVITY_MODULE_AVAILABLE = False
+    # Valores por defecto si el módulo no existe aún
+    GRAVITY_COLORS = {
+        "leve": "#10B981",
+        "moderada": "#F59E0B",
+        "severa": "#F97316",
+        "critica": "#DC2626"
+    }
+    
+    def enrich_detections_with_gravity(detections):
+        """Fallback: añade gravedad básica si no hay módulo"""
+        for d in detections:
+            area = d.get("Area_cm2", 0)
+            if area > 100:
+                gravity = "critica"
+            elif area > 30:
+                gravity = "severa"
+            elif area > 5:
+                gravity = "moderada"
+            else:
+                gravity = "leve"
+            d["gravedad"] = gravity
+            d["gravedad_score"] = {"leve": 1, "moderada": 2, "severa": 3, "critica": 4}[gravity]
+            d["gravedad_color"] = GRAVITY_COLORS[gravity]
+            d["gravedad_label"] = {"leve": "🟢 Leve", "moderada": "🟡 Moderada", "severa": "🟠 Severa", "critica": "🔴 CRÍTICA"}[gravity]
+        return sorted(detections, key=lambda x: x["gravedad_score"], reverse=True)
+    
+    def generate_priority_report(detections, filename):
+        """Fallback: genera reporte básico"""
+        enriched = enrich_detections_with_gravity(detections)
+        criticas = [d for d in enriched if d.get("gravedad") == "critica"]
+        severas = [d for d in enriched if d.get("gravedad") == "severa"]
+        total_score = sum(d.get("gravedad_score", 1) for d in enriched)
+        
+        if len(criticas) > 0:
+            recommendation = "🚨 INTERVENCIÓN INMEDIATA requerida"
+            urgency = "CRÍTICA"
+        elif len(severas) > 2:
+            recommendation = "⚠️ Programar intervención en < 30 días"
+            urgency = "ALTA"
+        elif total_score > 15:
+            recommendation = "📋 Programar intervención en < 90 días"
+            urgency = "MEDIA"
+        else:
+            recommendation = "✅ Monitoreo preventivo"
+            urgency = "BAJA"
+        
+        return {
+            "filename": filename,
+            "total_priority_score": total_score,
+            "urgency": urgency,
+            "recommendation": recommendation,
+            "criticas_count": len(criticas),
+            "severas_count": len(severas),
+            "top_3_detections": enriched[:3],
+            "all_detections": enriched
+        }
 
 # =============================================================================
 # CONFIGURACIÓN GLOBAL
@@ -36,8 +103,8 @@ ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
 MODEL_PATH = "best.pt"
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://gosywjlocfoettpzafga.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_ZYILG60f1uW9jbVkuOwXaA_bzpwnj3t")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
 COLORS = {
     "bg_primary":      "#F8FAFC",
@@ -87,9 +154,9 @@ class SupabaseClient:
             )
             if 200 <= r.status_code < 300:
                 return True, "Conectado a Supabase"
-            return False, f"HTTP {r.status_code}: {r.text[:120]}"
+            return False, f"Error HTTP {r.status_code} al conectar con Supabase"
         except Exception as e:
-            return False, str(e)
+            return False, "Sin conexión con Supabase"
     
     def insert(self, table: str, data) -> dict:
         try:
@@ -102,9 +169,9 @@ class SupabaseClient:
             )
             if r.status_code in (200, 201):
                 return {"data": r.json(), "error": None, "success": True, "status": r.status_code}
-            return {"data": None, "error": r.text, "success": False, "status": r.status_code}
+            return {"data": None, "error": f"Error HTTP {r.status_code} en Supabase", "success": False, "status": r.status_code}
         except Exception as e:
-            return {"data": None, "error": str(e), "success": False, "status": 0}
+            return {"data": None, "error": "Error de conexión con Supabase", "success": False, "status": 0}
     
     def select(self, table: str, query: str = "*", order: str = None, 
                limit: int = None, filters: dict = None) -> dict:
@@ -125,9 +192,9 @@ class SupabaseClient:
             )
             if 200 <= r.status_code < 300:
                 return {"data": r.json(), "error": None, "success": True, "status": r.status_code}
-            return {"data": None, "error": r.text, "success": False, "status": r.status_code}
+            return {"data": None, "error": f"Error HTTP {r.status_code} en Supabase", "success": False, "status": r.status_code}
         except Exception as e:
-            return {"data": None, "error": str(e), "success": False, "status": 0}
+            return {"data": None, "error": "Error de conexión con Supabase", "success": False, "status": 0}
     
     def delete_inspection(self, inspection_id: int) -> dict:
         try:
@@ -139,16 +206,23 @@ class SupabaseClient:
             )
             if 200 <= r.status_code < 300:
                 return {"success": True, "status": r.status_code}
-            return {"success": False, "status": r.status_code, "error": r.text}
+            return {"success": False, "status": r.status_code, "error": f"Error HTTP {r.status_code} en Supabase"}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Error de conexión con Supabase"}
     
     def check_duplicate_files(self, filenames: list) -> dict:
         if not filenames:
             return {"duplicates": [], "new_files": []}
         
         try:
-            filenames_clean = [f.replace("'", "''") for f in filenames]
+            safe_pattern = re.compile(r"^[\w.\- áéíóúÁÉÍÓÚñÑüÜ]+$")
+            filenames_clean = []
+            for f in filenames:
+                if safe_pattern.match(f):
+                    filenames_clean.append(f.replace("'", "''"))
+            if not filenames_clean:
+                return {"duplicates": [], "new_files": filenames}
+
             filter_value = f"in.({','.join(filenames_clean)})"
             
             result = self.select(
@@ -213,6 +287,8 @@ class SupabaseClient:
                         "height_px": int(d["Alto_px"]),
                         "area_cm2": float(d["Area_cm2"]),
                         "area_m2": float(d["Area_m2"]),
+                        "gravity_level": d.get("gravedad", "leve"),
+                        "gravity_score": d.get("gravedad_score", 1),
                     })
                 
                 if details_payload:
@@ -249,7 +325,7 @@ class SupabaseClient:
         
         result = self.select(
             "detection_details",
-            "inspection_id, class_name, area_m2, area_cm2, confidence, x1, y1, x2, y2, width_px, height_px",
+            "inspection_id, class_name, area_m2, area_cm2, confidence, x1, y1, x2, y2, width_px, height_px, gravity_level, gravity_score",
             filters={"inspection_id": f"in.({ids_str})"},
             limit=10000
         )
@@ -344,7 +420,7 @@ def filtrar_falsos_positivos(detections, image_shape, umbrales_clase):
     return filtered_detections
 
 def dibujar_cajas(img_cv2, detections):
-    """Dibuja bounding boxes con etiquetas"""
+    """Dibuja bounding boxes con etiquetas y colores de gravedad"""
     color_map = {"crack": (0, 0, 220), "humidity": (240, 100, 30), "spalling": (0, 140, 235)}
     
     for d in detections:
@@ -355,7 +431,8 @@ def dibujar_cajas(img_cv2, detections):
         cv2.rectangle(img_cv2, (x1, y1), (x2, y2), color, 8)
         
         conf_porcentaje = d["Confianza"] * 100
-        label = f"{d['Clase']} {conf_porcentaje:.1f}%"
+        gravity_label = d.get("gravedad_label", "")
+        label = f"{d['Clase']} {conf_porcentaje:.1f}% {gravity_label}"
         label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 3)[0]
         label_rect_origin = (x1, max(y1 - label_size[1] - 10, label_size[1] + 10))
         label_text_origin = (x1, max(y1, label_size[1] + 10))
@@ -591,6 +668,9 @@ def procesar_imagen_completa(model, image_path, class_thresholds, iou_threshold,
         d["Area_cm2"] = round(area_cm2, 2)
         d["Area_m2"] = round(area_cm2 / 10000, 5)
     
+    # Enriquecer con gravedad
+    detections_filtradas = enrich_detections_with_gravity(detections_filtradas)
+    
     class_counts = {"crack": 0, "humidity": 0, "spalling": 0}
     total_area_cm2 = 0
     confidences = []
@@ -625,15 +705,18 @@ def procesar_imagen_completa(model, image_path, class_thresholds, iou_threshold,
 class HeritageDetectorDesktop(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Heritage Damage Detector v6.4 - Desktop Edition | UCSM")
+        self.title("Heritage Damage Detector v6.5 - Desktop Edition | UCSM")
         self.geometry("1500x900")
         self.minsize(1200, 700)
         
         self.model = None
         self.db = SupabaseClient(SUPABASE_URL, SUPABASE_KEY)
-        ok, msg = self.db.ping()
-        if not ok:
-            messagebox.showwarning("Supabase", f"No se pudo conectar a Supabase:\n{msg}\n\nLa app funcionará pero no guardará datos.")
+        if SUPABASE_URL and SUPABASE_KEY:
+            ok, msg = self.db.ping()
+            if not ok:
+                messagebox.showwarning("Supabase", f"No se pudo conectar a Supabase:\n{msg}\n\nLa app funcionará pero no guardará datos.")
+        else:
+            messagebox.showwarning("Supabase", "Sin credenciales de Supabase.\nConfigura SUPABASE_URL y SUPABASE_KEY en .env\n\nLa app funcionará pero no guardará datos.")
         
         self.current_image_path = None
         self.last_result = None
@@ -655,6 +738,13 @@ class HeritageDetectorDesktop(ctk.CTk):
         self.load_model()
         self.create_ui()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        self.alert_system = AlertSystem(thresholds={
+            "max_damage_area_m2": 0.5,
+            "min_new_cracks": 10,
+            "growth_percentage_threshold": 20,
+            "min_avg_confidence": 70.0
+        })
     
     def load_model(self):
         try:
@@ -664,8 +754,8 @@ class HeritageDetectorDesktop(ctk.CTk):
             
             self.model = YOLO(MODEL_PATH)
             _ = self.model.predict(np.zeros((640, 640, 3), dtype=np.uint8), verbose=False, imgsz=640)
-        except Exception as e:
-            messagebox.showerror("Error al cargar modelo", str(e))
+        except Exception:
+            messagebox.showerror("Error al cargar modelo", "No se pudo cargar el modelo best.pt. Verifica que el archivo sea válido.")
     
     def create_ui(self):
         self.configure(fg_color=COLORS["bg_primary"])
@@ -679,7 +769,7 @@ class HeritageDetectorDesktop(ctk.CTk):
         
         ctk.CTkLabel(brand_frame, text="HERITAGE", font=(FONT_FAMILY, 22, "bold"), text_color=COLORS["text_primary"]).pack()
         ctk.CTkLabel(brand_frame, text="DETECTOR", font=(FONT_FAMILY, 22, "bold"), text_color=COLORS["accent_gold"]).pack()
-        ctk.CTkLabel(brand_frame, text="v6.4 · Desktop · UCSM", font=(FONT_FAMILY, 9), text_color=COLORS["text_muted"]).pack(pady=(5, 0))
+        ctk.CTkLabel(brand_frame, text="v6.5 · Desktop · UCSM", font=(FONT_FAMILY, 9), text_color=COLORS["text_muted"]).pack(pady=(5, 0))
         
         separator = ctk.CTkFrame(self.sidebar, height=2, fg_color=COLORS["accent_gold"], corner_radius=1)
         separator.pack(fill="x", padx=20, pady=15)
@@ -752,7 +842,7 @@ class HeritageDetectorDesktop(ctk.CTk):
         
         ctk.CTkLabel(header, text="INSPECCIÓN ESTRUCTURAL", font=(FONT_FAMILY, 10, "bold"), text_color=COLORS["accent_gold"]).pack(pady=(15, 2))
         ctk.CTkLabel(header, text="Análisis de Sillar Volcánico", font=(FONT_FAMILY, 22, "bold"), text_color=COLORS["text_primary"]).pack()
-        ctk.CTkLabel(header, text="Filtrado geométrico anti-porosidad + anti-sombras + micro-inferencia por tiling", font=(FONT_FAMILY, 11), text_color=COLORS["text_secondary"], justify="center").pack(pady=(6, 12))
+        ctk.CTkLabel(header, text="Filtrado geométrico anti-porosidad + anti-sombras + micro-inferencia por tiling + HOVER INTERACTIVO", font=(FONT_FAMILY, 11), text_color=COLORS["text_secondary"], justify="center").pack(pady=(6, 12))
         
         main = ctk.CTkFrame(self.content, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=15, pady=15)
@@ -782,7 +872,6 @@ class HeritageDetectorDesktop(ctk.CTk):
         )
         self.btn_load.pack(pady=5, fill="x")
         
-        # BOTÓN DE CANCELAR (NUEVO)
         self.btn_cancel = ctk.CTkButton(
             scroll, text="CANCELAR PROCESAMIENTO",
             command=self.cancel_processing,
@@ -882,7 +971,6 @@ class HeritageDetectorDesktop(ctk.CTk):
         )
         self.btn_save.pack(pady=5, fill="x")
         
-        # BOTONES DE NAVEGACIÓN ENTRE IMÁGENES
         self.nav_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         self.nav_frame.pack(fill="x", pady=10)
         
@@ -935,15 +1023,159 @@ class HeritageDetectorDesktop(ctk.CTk):
         self.lbl_waiting.pack(pady=20)
     
     def create_visualization_panel(self, parent):
-        self.image_label = ctk.CTkLabel(
-            parent,
-            text="Carga una imagen del monumento para comenzar\n\n  • Grietas (Crack)\n  • Humedad (Humidity)\n  • Desprendimiento (Spalling)",
-            font=(FONT_FAMILY, 14),
-            text_color=COLORS["text_muted"],
-            justify="center",
-            fg_color=COLORS["bg_surface"], corner_radius=8
+        """Panel de visualización con Canvas interactivo para hover"""
+        self.viz_frame = ctk.CTkFrame(parent, fg_color=COLORS["bg_surface"], corner_radius=8)
+        self.viz_frame.pack(expand=True, fill="both", padx=20, pady=20)
+        
+        self.canvas = tk.Canvas(
+            self.viz_frame, 
+            bg=COLORS["bg_surface"], 
+            highlightthickness=0
         )
-        self.image_label.pack(expand=True, fill="both", padx=20, pady=20)
+        self.canvas.pack(expand=True, fill="both", padx=10, pady=10)
+        
+        self.tooltip = tk.Toplevel(self.canvas)
+        self.tooltip.withdraw()
+        self.tooltip.overrideredirect(True)
+        self.tooltip.configure(bg="#1E293B", padx=8, pady=6)
+        
+        self.tooltip_label = tk.Label(
+            self.tooltip, 
+            text="", 
+            bg="#1E293B", 
+            fg="#FFFFFF", 
+            font=("Segoe UI", 10, "bold"),
+            justify="left"
+        )
+        self.tooltip_label.pack()
+        
+        self.canvas.create_text(
+            400, 300,
+            text="Carga una imagen del monumento para comenzar\n\n• Pasa el cursor sobre las detecciones para ver medidas\n• Colores indican gravedad: 🟢 Leve → 🔴 Crítica",
+            fill=COLORS["text_muted"],
+            font=("Segoe UI", 14),
+            justify="center"
+        )
+        
+        self.drawn_boxes = []
+    
+    def display_image(self, path_or_array):
+        """Muestra imagen con detecciones INTERACTIVAS (hover = medidas)"""
+        if isinstance(path_or_array, str):
+            img = cv2.imread(path_or_array)
+            if img is None:
+                return
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        else:
+            img = path_or_array
+    
+        canvas_w = self.canvas.winfo_width() or 1000
+        canvas_h = self.canvas.winfo_height() or 700
+        h, w = img.shape[:2]
+        ratio = min(canvas_w / w, canvas_h / h, 1.0)
+        new_w, new_h = int(w * ratio), int(h * ratio)
+    
+        img_resized = cv2.resize(img, (new_w, new_h))
+        img_pil = Image.fromarray(img_resized)
+    
+        # ✅ CORRECCIÓN: Usar ImageTk.PhotoImage en lugar de CTkImage
+        self.tk_image = ImageTk.PhotoImage(img_pil)
+    
+        self.canvas.delete("all")
+        self.drawn_boxes = []
+    
+        self.canvas.update_idletasks()
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        offset_x = (cw - new_w) // 2
+        offset_y = (ch - new_h) // 2
+    
+        # ✅ Ahora sí funciona con tkinter Canvas
+        self.canvas.create_image(offset_x, offset_y, anchor="nw", image=self.tk_image)
+    
+        self._current_display_ratio = ratio
+        self._current_display_offset = (offset_x, offset_y)
+    
+        if self.last_result and self.last_result.get("detections"):
+            for d in self.last_result["detections"]:
+                x1 = int(d["x1"] * ratio) + offset_x
+                y1 = int(d["y1"] * ratio) + offset_y
+                x2 = int(d["x2"] * ratio) + offset_x
+                y2 = int(d["y2"] * ratio) + offset_y
+            
+                gravity = d.get("gravedad", "leve")
+                color_hex = GRAVITY_COLORS.get(gravity, "#DC2626")
+                color_rgb = tuple(int(color_hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                color_str = f"#{color_rgb[0]:02x}{color_rgb[1]:02x}{color_rgb[2]:02x}"
+            
+                rect_id = self.canvas.create_rectangle(
+                x1, y1, x2, y2,
+                outline=color_str, width=3, fill=""
+                )
+            
+                label_text = f"{d['Clase']} {d.get('gravedad_label', '')} | {d['Area_cm2']:.1f}cm²"
+                label_id = self.canvas.create_text(
+                x1, max(y1 - 12, 10),
+                text=label_text,
+                anchor="sw",
+                fill=color_str,
+                font=("Segoe UI", 9, "bold")
+               )   
+            
+                self.drawn_boxes.append({
+                "coords": (x1, y1, x2, y2),
+                "detection": d,
+                "rect_id": rect_id,
+                "label_id": label_id,
+                "color": color_str
+                })
+    
+        self.canvas.bind("<Motion>", self._on_canvas_motion)
+        self.canvas.bind("<Leave>", self._on_canvas_leave)
+    def _on_canvas_motion(self, event):
+        """Muestra tooltip con medidas exactas al pasar el cursor"""
+        if not self.drawn_boxes:
+            return
+        
+        hovered_box = None
+        for box in self.drawn_boxes:
+            x1, y1, x2, y2 = box["coords"]
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                hovered_box = box
+                break
+        
+        if hovered_box:
+            d = hovered_box["detection"]
+            
+            self.canvas.itemconfig(hovered_box["rect_id"], width=5)
+            
+            tooltip_text = (
+                f"📐 {d['Clase'].upper()}\n"
+                f"🎯 Gravedad: {d.get('gravedad_label', 'N/A')}\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"📏 Área: {d['Area_cm2']:.2f} cm²\n"
+                f"      ({d['Area_m2']:.5f} m²)\n"
+                f"↔️  Ancho: {d['Ancho_px']} px\n"
+                f"↕️  Alto:  {d['Alto_px']} px\n"
+                f"🎯 Confianza: {d['Confianza']*100:.1f}%"
+            )
+            
+            self.tooltip_label.configure(text=tooltip_text)
+            
+            canvas_root_x = self.canvas.winfo_rootx()
+            canvas_root_y = self.canvas.winfo_rooty()
+            self.tooltip.geometry(f"+{canvas_root_x + event.x + 15}+{canvas_root_y + event.y + 15}")
+            self.tooltip.deiconify()
+        else:
+            for box in self.drawn_boxes:
+                self.canvas.itemconfig(box["rect_id"], width=3)
+            self.tooltip.withdraw()
+    
+    def _on_canvas_leave(self, event):
+        """Oculta tooltip al salir del canvas"""
+        self.tooltip.withdraw()
+        for box in self.drawn_boxes:
+            self.canvas.itemconfig(box["rect_id"], width=3)
     
     def update_label(self, label, value, is_int=False):
         if is_int:
@@ -1020,8 +1252,8 @@ class HeritageDetectorDesktop(ctk.CTk):
                 f"El botón GUARDAR se habilitará al terminar todo el lote."
             )
         
-        except Exception as e:
-            messagebox.showerror("Error de Conexión", f"No se pudo verificar duplicados:\n{str(e)}")
+        except Exception:
+            messagebox.showerror("Error de Conexión", "No se pudo verificar duplicados con Supabase.")
     
     def _start_batch_processing(self):
         if not self.processing_queue:
@@ -1097,6 +1329,23 @@ class HeritageDetectorDesktop(ctk.CTk):
             self.after(500, self._start_batch_processing)
             return
         
+        # Enriquecer con reporte de priorización
+        if result.get("detections"):
+            result["priority_report"] = generate_priority_report(
+                result["detections"], 
+                os.path.basename(image_path)
+            )
+        
+        last_history = None
+        filename = os.path.basename(image_path)
+        hist = self.db.select("inspection_results", "*", filters={"filename": f"eq.{filename}"}, order="created_at.desc", limit=1)
+        if hist["success"] and hist["data"]:
+            last_history = hist["data"][0]
+        
+        alerts = self.alert_system.evaluate_current_result(result, last_history)
+        if alerts:
+            self.alert_system.log_alerts(alerts)
+        
         result["filename"] = os.path.basename(image_path)
         result["timestamp"] = datetime.now().isoformat()
         result["image_path"] = image_path
@@ -1114,26 +1363,21 @@ class HeritageDetectorDesktop(ctk.CTk):
         total = len(self.processing_queue)
         processed = len(self.all_results)
         
-        # Resetear estado de cola
         self.processing_queue.clear()
         self.current_queue_index = -1
         
-        # Restaurar botones principales
         self.btn_process.configure(state="normal", text="INICIAR PROCESAMIENTO")
         self.btn_load.configure(state="normal")
         
         if processed > 0:
-            # Habilitar botón guardar - el usuario decide
             self.btn_save.configure(
                 state="normal",
                 text=f"GUARDAR {processed} RESULTADOS"
             )
             self.btn_export.configure(state="normal")
             
-            # Configurar navegación entre imágenes
             self.current_view_index = 0
             
-            # Habilitar botones de navegación
             if processed > 1:
                 self.btn_previous.configure(state="normal")
                 self.btn_next.configure(state="normal")
@@ -1143,7 +1387,6 @@ class HeritageDetectorDesktop(ctk.CTk):
             
             self.update_image_counter()
             
-            # Mostrar primera imagen procesada
             self.last_result = self.all_results[0]
             self.display_image(self.last_result["annotated_image"])
             self.show_results_visual(self.last_result)
@@ -1152,6 +1395,7 @@ class HeritageDetectorDesktop(ctk.CTk):
                 "Procesamiento Completado",
                 f"✅ Se procesaron {processed} imágenes exitosamente.\n\n"
                 f"📊 Usa los botones ◀ Anterior y Siguiente ▶ para navegar.\n\n"
+                f"💡 Pasa el cursor sobre las detecciones para ver medidas exactas.\n\n"
                 f"Haz clic en 'GUARDAR {processed} RESULTADOS' para subirlos a Supabase."
             )
         else:
@@ -1161,26 +1405,6 @@ class HeritageDetectorDesktop(ctk.CTk):
                 "Sin Resultados",
                 "No se pudo procesar ninguna imagen de la cola."
             )
-    
-    def display_image(self, path_or_array):
-        if isinstance(path_or_array, str):
-            img = cv2.imread(path_or_array)
-            if img is None:
-                return
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        else:
-            img = path_or_array
-        
-        max_w, max_h = 1000, 700
-        h, w = img.shape[:2]
-        ratio = min(max_w / w, max_h / h)
-        new_w, new_h = int(w * ratio), int(h * ratio)
-        
-        img_resized = cv2.resize(img, (new_w, new_h))
-        img_pil = Image.fromarray(img_resized)
-        
-        self.ctk_image = ctk.CTkImage(img_pil, size=(new_w, new_h))
-        self.image_label.configure(image=self.ctk_image, text="", fg_color="transparent")
     
     def process_image(self):
         if not self.processing_queue:
@@ -1294,6 +1518,49 @@ class HeritageDetectorDesktop(ctk.CTk):
         separator = ctk.CTkFrame(self.results_frame, height=2, fg_color=COLORS["border"], corner_radius=1)
         separator.pack(fill="x", padx=10, pady=10)
         
+        # Mostrar reporte de priorización si existe
+        if result.get("priority_report"):
+            pr = result["priority_report"]
+            
+            priority_frame = ctk.CTkFrame(
+                self.results_frame, 
+                fg_color=COLORS["bg_card"], 
+                corner_radius=8, 
+                border_width=2,
+                border_color=GRAVITY_COLORS.get(
+                    "critica" if pr["urgency"] == "CRÍTICA" else 
+                    "severa" if pr["urgency"] == "ALTA" else "moderada",
+                    "#10B981"
+                )
+            )
+            priority_frame.pack(fill="x", padx=10, pady=10)
+            
+            ctk.CTkLabel(
+                priority_frame,
+                text=f"🏛️ PRIORIZACIÓN DE INTERVENCIÓN",
+                font=(FONT_FAMILY, 11, "bold"),
+                text_color=COLORS["accent_gold"]
+            ).pack(pady=(10, 5))
+            
+            ctk.CTkLabel(
+                priority_frame,
+                text=pr["recommendation"],
+                font=(FONT_FAMILY, 12, "bold"),
+                text_color=COLORS["text_primary"]
+            ).pack(pady=5)
+            
+            info_text = (
+                f"Score prioridad: {pr['total_priority_score']} | "
+                f"Urgencia: {pr['urgency']} | "
+                f"Críticas: {pr['criticas_count']} | Severas: {pr['severas_count']}"
+            )
+            ctk.CTkLabel(
+                priority_frame,
+                text=info_text,
+                font=(FONT_FAMILY, 10),
+                text_color=COLORS["text_secondary"]
+            ).pack(pady=(0, 10))
+        
         ctk.CTkLabel(
             self.results_frame,
             text="Desglose por tipo:",
@@ -1406,7 +1673,9 @@ class HeritageDetectorDesktop(ctk.CTk):
                         "width_px": d["Ancho_px"],
                         "height_px": d["Alto_px"],
                         "area_cm2": d["Area_cm2"],
-                        "area_m2": d["Area_m2"]
+                        "area_m2": d["Area_m2"],
+                        "gravedad": d.get("gravedad", "leve"),
+                        "gravedad_score": d.get("gravedad_score", 1)
                     }
                     for d in self.last_result["detections"]
                 ]
@@ -1710,7 +1979,7 @@ class HeritageDetectorDesktop(ctk.CTk):
             ("Framework:", "CustomTkinter (Desktop nativo)"),
             ("Backend ML:", "Ultralytics YOLO v8.x"),
             ("Base de Datos:", "Supabase PostgreSQL (nube)"),
-            ("Visualización:", "Matplotlib + OpenCV"),
+            ("Visualización:", "Matplotlib + OpenCV + Canvas Interactivo"),
             ("Aceleración:", "CUDA si disponible"),
         ]
         
@@ -1761,6 +2030,8 @@ confidence (REAL)
 x1, y1, x2, y2 (INTEGER)
 width_px, height_px (INTEGER)
 area_cm2, area_m2 (REAL)
+gravity_level (TEXT) - NUEVO v6.5
+gravity_score (INTEGER) - NUEVO v6.5
 """
         ctk.CTkLabel(db_frame, text=db_text, font=(FONT_FAMILY, 9), text_color=COLORS["text_primary"], justify="left").pack(padx=20, pady=(0, 15), anchor="w")
     

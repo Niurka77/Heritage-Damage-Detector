@@ -28,6 +28,8 @@ import requests
 import json
 from datetime import datetime
 import os
+import html
+import re
 from dotenv import load_dotenv
 
 # >>> CORRECCION 1: Cargar variables de entorno
@@ -36,8 +38,9 @@ warnings.filterwarnings('ignore', category=DeprecationWarning)
 warnings.filterwarnings('ignore', message='.use_container_width.')
 
 # --- CONFIGURACION SUPABASE ---
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://gosywjlocfoettpzafga.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_ZYILG60f1uW9jbVkuOwXaA_bzpwnj3t")
+# Credenciales leidas SOLO desde variables de entorno / .env (nunca hardcodeadas).
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
 # --- CLIENTE SUPABASE ---
 class SupabaseClient:
@@ -60,9 +63,9 @@ class SupabaseClient:
             )
             if r.status_code in (200, 201):
                 return {"data": r.json(), "error": None, "success": True, "status": r.status_code}
-            return {"data": None, "error": r.text, "success": False, "status": r.status_code}
+            return {"data": None, "error": f"Error HTTP {r.status_code} en Supabase", "success": False, "status": r.status_code}
         except Exception as e:
-            return {"data": None, "error": str(e), "success": False, "status": 0}
+            return {"data": None, "error": "Error de conexión con Supabase", "success": False, "status": 0}
     
     # >>> CORRECCION 2: Metodo delete corregido para PostgREST
     def delete_inspection(self, inspection_id: int) -> dict:
@@ -76,9 +79,9 @@ class SupabaseClient:
             )
             if 200 <= r.status_code < 300:
                 return {"success": True, "status": r.status_code}
-            return {"success": False, "status": r.status_code, "error": r.text}
+            return {"success": False, "status": r.status_code, "error": f"Error HTTP {r.status_code} en Supabase"}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": "Error de conexión con Supabase"}
     
     def select(self, table: str, query: str = "*", order: str = None, limit: int = None, filters: dict = None) -> dict:
         try:
@@ -97,9 +100,9 @@ class SupabaseClient:
             )
             if 200 <= r.status_code < 300:
                 return {"data": r.json(), "error": None, "success": True, "status": r.status_code}
-            return {"data": None, "error": r.text, "success": False, "status": r.status_code}
+            return {"data": None, "error": f"Error HTTP {r.status_code} en Supabase", "success": False, "status": r.status_code}
         except Exception as e:
-            return {"data": None, "error": str(e), "success": False, "status": 0}
+            return {"data": None, "error": "Error de conexión con Supabase", "success": False, "status": 0}
     
     def ping(self) -> tuple[bool, str]:
         try:
@@ -111,12 +114,14 @@ class SupabaseClient:
             )
             if 200 <= r.status_code < 300:
                 return True, "Conectado a Supabase"
-            return False, f"HTTP {r.status_code}: {r.text[:120]}"
+            return False, f"Error HTTP {r.status_code} al conectar con Supabase"
         except Exception as e:
-            return False, str(e)
+            return False, "Sin conexión con Supabase"
 
 @st.cache_resource
 def init_supabase():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None, "Sin credenciales de Supabase. Configura SUPABASE_URL y SUPABASE_KEY en el archivo .env."
     client = SupabaseClient(SUPABASE_URL, SUPABASE_KEY)
     ok, msg = client.ping()
     return client if ok else None, msg
@@ -128,8 +133,15 @@ def check_duplicate_files(filenames: list) -> dict:
         return {"duplicates": [], "new_files": filenames}
     
     try:
-        # Construir filtro IN para PostgREST (SIN comillas)
-        filenames_clean = [f.replace("'", "''") for f in filenames]
+        # Validar nombres para evitar manipulacion de expresiones PostgREST
+        safe_pattern = re.compile(r"^[\w.\- áéíóúÁÉÍÓÚñÑüÜ]+$")
+        filenames_clean = []
+        for f in filenames:
+            if safe_pattern.match(f):
+                filenames_clean.append(f.replace("'", "''"))
+        if not filenames_clean:
+            return {"duplicates": [], "new_files": filenames}
+
         filter_value = f"in.({','.join(filenames_clean)})"
         
         result = supabase_client.select(
@@ -145,8 +157,8 @@ def check_duplicate_files(filenames: list) -> dict:
             return {"duplicates": duplicates, "new_files": new_files}
         
         return {"duplicates": [], "new_files": filenames}
-    except Exception as e:
-        st.error(f"Error al verificar duplicados: {str(e)}")
+    except Exception:
+        st.error("Error al verificar duplicados en Supabase.")
         return {"duplicates": [], "new_files": filenames}
 # --- FUNCIONES DE SUPABASE (GUARDADO Y CARGA) ---
 def save_to_supabase(results_list, uploaded_files):
@@ -1650,8 +1662,7 @@ def load_model(model_path="best.pt"):
         _ = model.predict(np.zeros((640, 640, 3), dtype=np.uint8), verbose=False, imgsz=640)
         return model
     except Exception as e:
-        st.error(f"Error al cargar el modelo: {type(e).__name__}")
-        st.code(str(e))
+        st.error(f"Error al cargar el modelo: {type(e).__name__}. Revisa que best.pt sea válido.")
         return None
 
 model = load_model()
@@ -1827,7 +1838,7 @@ if page == "Analisis en Campo":
                 <div class="result-card">
                     <div class="result-card-header">
                         <div class="file-icon">IMG</div>
-                        <div class="file-name">{uploaded_file.name}</div>
+                        <div class="file-name">{html.escape(uploaded_file.name)}</div>
                     </div>
                 """, unsafe_allow_html=True)
                 
@@ -2035,7 +2046,7 @@ elif page == "Cuadro de Mandos":
     with col2:
         st.markdown(f'<div class="metric-card"><div class="metric-label">Superficie</div><h3>{total_area_m2:.4f} m2</h3><p>Area total afectada</p></div>', unsafe_allow_html=True)
     with col3:
-        dn = critical_name[:22] + "..." if len(critical_name) > 22 else critical_name
+        dn = html.escape(critical_name[:22] + "..." if len(critical_name) > 22 else critical_name)
         st.markdown(f'<div class="metric-card"><div class="metric-label">Severidad Maxima</div><h3 style="font-size:1.35rem;">{dn}</h3><p>Imagen con mayor severidad</p></div>', unsafe_allow_html=True)
     
     st.markdown("---")
