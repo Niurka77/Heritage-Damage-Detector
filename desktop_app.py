@@ -909,38 +909,41 @@ class HeritageDetectorDesktop(ctk.CTk):
         
         ctk.CTkLabel(scroll, text="CALIBRACIÓN PARA SILLAR", font=(FONT_FAMILY, 11, "bold"), text_color=COLORS["accent_gold"]).pack(pady=(10, 5))
         
+        # ---- Preset de calibración (por defecto óptimo o alta confiabilidad 85%) ----
+        self.preset_var = ctk.StringVar(value="recomendado")
+        preset_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        preset_row.pack(fill="x", pady=(2, 4))
+        ctk.CTkLabel(preset_row, text="Modo de detección:", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(anchor="w")
+        self.opt_recomendado = ctk.CTkRadioButton(
+            preset_row, text="Recomendado (detecta más daños)", variable=self.preset_var, value="recomendado",
+            command=self.apply_preset, font=(FONT_FAMILY, 10), text_color=COLORS["text_secondary"], fg_color=COLORS["primary"])
+        self.opt_recomendado.pack(anchor="w", pady=(3, 0))
+        self.opt_85 = ctk.CTkRadioButton(
+            preset_row, text="Alta confiabilidad (85%)", variable=self.preset_var, value="alto",
+            command=self.apply_preset, font=(FONT_FAMILY, 10), text_color=COLORS["text_secondary"], fg_color=COLORS["primary"])
+        self.opt_85.pack(anchor="w", pady=(2, 0))
+        
+        # ---- Umbrales simples (siempre visibles) ----
         ctk.CTkLabel(scroll, text="Grietas (Crack):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.slider_crack = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.update_label(self.lbl_crack, v))
+        self.slider_crack = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.on_threshold_change(self.lbl_crack, v))
         self.slider_crack.set(0.20)
         self.slider_crack.pack(fill="x", pady=2)
         self.lbl_crack = ctk.CTkLabel(scroll, text="20%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["crack"])
         self.lbl_crack.pack()
         
         ctk.CTkLabel(scroll, text="Humedad (Humidity):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.slider_humidity = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.update_label(self.lbl_humidity, v))
+        self.slider_humidity = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.on_threshold_change(self.lbl_humidity, v))
         self.slider_humidity.set(0.50)
         self.slider_humidity.pack(fill="x", pady=2)
         self.lbl_humidity = ctk.CTkLabel(scroll, text="50%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["humidity"])
         self.lbl_humidity.pack()
         
         ctk.CTkLabel(scroll, text="Desprendimiento (Spalling):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.slider_spalling = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.update_label(self.lbl_spalling, v))
+        self.slider_spalling = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.on_threshold_change(self.lbl_spalling, v))
         self.slider_spalling.set(0.60)
         self.slider_spalling.pack(fill="x", pady=2)
         self.lbl_spalling = ctk.CTkLabel(scroll, text="60%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["spalling"])
         self.lbl_spalling.pack()
-        
-        ctk.CTkLabel(scroll, text="IoU Threshold:", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.slider_iou = ctk.CTkSlider(scroll, from_=0.1, to=0.9, number_of_steps=16, command=lambda v: self.update_label(self.lbl_iou, v))
-        self.slider_iou.set(0.45)
-        self.slider_iou.pack(fill="x", pady=2)
-        self.lbl_iou = ctk.CTkLabel(scroll, text="45%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["text_primary"])
-        self.lbl_iou.pack()
-        
-        ctk.CTkLabel(scroll, text="GSD (cm/pixel):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.entry_gsd = ctk.CTkEntry(scroll, width=100, font=(FONT_FAMILY, 11), fg_color=COLORS["bg_surface"], border_color=COLORS["border"], text_color=COLORS["text_primary"])
-        self.entry_gsd.insert(0, "0.13")
-        self.entry_gsd.pack(pady=2)
         
         ctk.CTkButton(
             scroll, text="↺ Restaurar calibración recomendada",
@@ -952,25 +955,49 @@ class HeritageDetectorDesktop(ctk.CTk):
         separator2 = ctk.CTkFrame(scroll, height=2, fg_color=COLORS["accent_gold"], corner_radius=1)
         separator2.pack(fill="x", pady=8)
         
-        ctk.CTkLabel(scroll, text="MICRO-INFERENCIA", font=(FONT_FAMILY, 11, "bold"), text_color=COLORS["accent_gold"]).pack(pady=(10, 5))
+        # ---- Configuración avanzada (plegable, inicia cerrada para evitar confusiones al scroll) ----
+        self.adv_open = False
+        self.btn_advanced = ctk.CTkButton(
+            scroll, text="▸ Configuración avanzada",
+            command=self.toggle_advanced,
+            font=(FONT_FAMILY, 10, "bold"),
+            fg_color="transparent", border_width=1, border_color=COLORS["border"],
+            text_color=COLORS["text_secondary"], hover_color=COLORS["bg_surface"], height=30
+        )
+        self.btn_advanced.pack(fill="x", pady=(6, 2))
         
-        self.chk_tiling = ctk.CTkCheckBox(scroll, text="Activar Tiling (detalles pequeños)", command=self.toggle_tiling, font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"])
+        self.adv_frame = ctk.CTkFrame(scroll, fg_color=COLORS["bg_panel"], corner_radius=8)
+        # (No se empaqueta hasta que se abra, para que no interfiera con el scroll)
+        
+        ctk.CTkLabel(self.adv_frame, text="IoU Threshold:", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(8, 0), padx=10)
+        self.slider_iou = ctk.CTkSlider(self.adv_frame, from_=0.1, to=0.9, number_of_steps=16, command=lambda v: self.update_label(self.lbl_iou, v))
+        self.slider_iou.set(0.45)
+        self.slider_iou.pack(fill="x", pady=2, padx=10)
+        self.lbl_iou = ctk.CTkLabel(self.adv_frame, text="45%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["text_primary"])
+        self.lbl_iou.pack()
+        
+        ctk.CTkLabel(self.adv_frame, text="GSD (cm/pixel):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0), padx=10)
+        self.entry_gsd = ctk.CTkEntry(self.adv_frame, width=100, font=(FONT_FAMILY, 11), fg_color=COLORS["bg_surface"], border_color=COLORS["border"], text_color=COLORS["text_primary"])
+        self.entry_gsd.insert(0, "0.13")
+        self.entry_gsd.pack(pady=2, padx=10)
+        
+        self.chk_tiling = ctk.CTkCheckBox(self.adv_frame, text="Activar Tiling (detección de detalles pequeños)", command=self.toggle_tiling, font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"])
         self.chk_tiling.select()
-        self.chk_tiling.pack(anchor="w", pady=5)
+        self.chk_tiling.pack(anchor="w", pady=(5, 2), padx=10)
         
-        ctk.CTkLabel(scroll, text="Tamaño del tile (px):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.slider_tile = ctk.CTkSlider(scroll, from_=320, to=1280, number_of_steps=15, command=lambda v: self.update_label(self.lbl_tile, v, is_int=True))
+        ctk.CTkLabel(self.adv_frame, text="Tamaño del tile (px):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0), padx=10)
+        self.slider_tile = ctk.CTkSlider(self.adv_frame, from_=320, to=1280, number_of_steps=15, command=lambda v: self.update_label(self.lbl_tile, v, is_int=True))
         self.slider_tile.set(640)
-        self.slider_tile.pack(fill="x", pady=2)
-        self.lbl_tile = ctk.CTkLabel(scroll, text="640 px", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["text_primary"])
+        self.slider_tile.pack(fill="x", pady=2, padx=10)
+        self.lbl_tile = ctk.CTkLabel(self.adv_frame, text="640 px", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["text_primary"])
         self.lbl_tile.pack()
         
-        ctk.CTkLabel(scroll, text="Solapamiento (%):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
-        self.slider_overlap = ctk.CTkSlider(scroll, from_=0, to=50, number_of_steps=10, command=lambda v: self.update_label(self.lbl_overlap, v, is_int=True))
+        ctk.CTkLabel(self.adv_frame, text="Solapamiento (%):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0), padx=10)
+        self.slider_overlap = ctk.CTkSlider(self.adv_frame, from_=0, to=50, number_of_steps=10, command=lambda v: self.update_label(self.lbl_overlap, v, is_int=True))
         self.slider_overlap.set(20)
-        self.slider_overlap.pack(fill="x", pady=2)
-        self.lbl_overlap = ctk.CTkLabel(scroll, text="20%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["text_primary"])
-        self.lbl_overlap.pack()
+        self.slider_overlap.pack(fill="x", pady=2, padx=10)
+        self.lbl_overlap = ctk.CTkLabel(self.adv_frame, text="20%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["text_primary"])
+        self.lbl_overlap.pack(pady=(0, 10))
         
         separator3 = ctk.CTkFrame(scroll, height=2, fg_color=COLORS["accent_gold"], corner_radius=1)
         separator3.pack(fill="x", pady=8)
@@ -1212,17 +1239,46 @@ class HeritageDetectorDesktop(ctk.CTk):
     def toggle_tiling(self):
         self.use_tiling = self.chk_tiling.get()
 
+    def on_threshold_change(self, label, value):
+        """Actualiza el texto del umbral cuando el usuario mueve el slider."""
+        self.update_label(label, value)
+
+    def toggle_advanced(self):
+        """Muestra u oculta la configuracion avanzada (para evitar confusiones al hacer scroll)."""
+        if self.adv_open:
+            self.adv_frame.pack_forget()
+            self.btn_advanced.configure(text="▸ Configuración avanzada")
+            self.adv_open = False
+        else:
+            self.adv_frame.pack(fill="x", pady=(2, 4))
+            self.btn_advanced.configure(text="▾ Configuración avanzada")
+            self.adv_open = True
+
+    def apply_preset(self):
+        """Aplica el preset de calibracion segun el modo seleccionado."""
+        modo = self.preset_var.get()
+        if modo == "recomendado":
+            self.slider_crack.set(0.20)
+            self.slider_humidity.set(0.50)
+            self.slider_spalling.set(0.60)
+            self.update_label(self.lbl_crack, 0.20)
+            self.update_label(self.lbl_humidity, 0.50)
+            self.update_label(self.lbl_spalling, 0.60)
+        elif modo == "alto":
+            self.slider_crack.set(0.85)
+            self.slider_humidity.set(0.85)
+            self.slider_spalling.set(0.85)
+            self.update_label(self.lbl_crack, 0.85)
+            self.update_label(self.lbl_humidity, 0.85)
+            self.update_label(self.lbl_spalling, 0.85)
+
     def restore_recommended_calibration(self):
         """Restaura la calibracion optima recomendada para sillar."""
-        self.slider_crack.set(0.20)
-        self.slider_humidity.set(0.50)
-        self.slider_spalling.set(0.60)
+        self.preset_var.set("recomendado")
+        self.apply_preset()
         self.slider_iou.set(0.45)
-        self.update_label(self.lbl_crack, 0.20)
-        self.update_label(self.lbl_humidity, 0.50)
-        self.update_label(self.lbl_spalling, 0.60)
         self.update_label(self.lbl_iou, 0.45)
-        messagebox.showinfo("Calibración", "Calibración restablecida a los valores óptimos recomendados para sillar (Crack 20%, Humedad 50%, Desprendimiento 60%).")
+        messagebox.showinfo("Calibración", "Calibración restablecida al modo recomendado para sillar (Crack 20%, Humedad 50%, Desprendimiento 60%). Esto detecta más daños de forma confiable.\n\nSi la evaluación exige confiabilidad alta, elija el modo 'Alta confiabilidad (85%)'.")
     
     def load_image(self):
         file_paths = filedialog.askopenfilenames(
