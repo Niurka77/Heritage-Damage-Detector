@@ -5,7 +5,7 @@ a = Analysis(
     ['desktop_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('best.pt', '.')],
+    datas=[('best.pt', '.'), ('.env', '.')],
     hiddenimports=['customtkinter', 'PIL', 'cv2', 'ultralytics', 'matplotlib', 'pandas'],
     hookspath=[],
     hooksconfig={},

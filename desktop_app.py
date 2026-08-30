@@ -22,6 +22,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from datetime import datetime
 import os
+import sys
 import json
 import re
 import time
@@ -30,7 +31,20 @@ import requests
 import threading
 from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+
+def _cargar_config():
+    """Carga .env desde el directorio empaquetado (PyInstaller) o el directorio actual."""
+    try:
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        env_path = os.path.join(base, ".env")
+        if os.path.exists(env_path):
+            load_dotenv(env_path, override=True)
+            return
+    except Exception:
+        pass
+    load_dotenv()
+
+_cargar_config()
 
 # Intentar importar detection_gravity (si existe)
 try:
