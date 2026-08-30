@@ -120,6 +120,17 @@ MODEL_PATH = "best.pt"
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 
+def _resolver_ruta_recurso(nombre):
+    """Devuelve la ruta de un archivo empaquetado (PyInstaller _MEIPASS) o local."""
+    try:
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        ruta = os.path.join(base, nombre)
+        if os.path.exists(ruta):
+            return ruta
+    except Exception:
+        pass
+    return nombre
+
 COLORS = {
     "bg_primary":      "#F8FAFC",
     "bg_secondary":    "#FFFFFF",
@@ -767,14 +778,16 @@ class HeritageDetectorDesktop(ctk.CTk):
     
     def load_model(self):
         try:
-            if not Path(MODEL_PATH).exists():
+            ruta_modelo = _resolver_ruta_recurso(MODEL_PATH)
+            if not os.path.exists(ruta_modelo):
                 messagebox.showerror("Error", f"No se encontró {MODEL_PATH}\n\nColoca best.pt en la misma carpeta.")
                 return
             
-            self.model = YOLO(MODEL_PATH)
+            self.model = YOLO(ruta_modelo)
             _ = self.model.predict(np.zeros((640, 640, 3), dtype=np.uint8), verbose=False, imgsz=640)
-        except Exception:
-            messagebox.showerror("Error al cargar modelo", "No se pudo cargar el modelo best.pt. Verifica que el archivo sea válido.")
+        except Exception as e:
+            messagebox.showerror("Error al cargar modelo",
+                                 f"No se pudo cargar el modelo best.pt. Verifica que el archivo sea válido.\n\nDetalle: {type(e).__name__}")
     
     def create_ui(self):
         self.configure(fg_color=COLORS["bg_primary"])
