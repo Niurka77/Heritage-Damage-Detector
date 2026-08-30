@@ -1693,16 +1693,38 @@ with st.sidebar:
     
     st.markdown("### Calibracion para Sillar")
     st.markdown("<small style='color:var(--c-neutral-600);'>Ajusta segun la porosidad de la piedra</small>", unsafe_allow_html=True)
-    
-    t_crack = st.slider("Grietas (Crack)", min_value=0.05, max_value=0.90, value=0.15, step=0.01,
-                       help="Umbral bajo para capturar fisuras delgadas en sillar")
-    t_humidity = st.slider("Humedad (Humidity)", min_value=0.05, max_value=0.90, value=0.60, step=0.01,
-                          help="Umbral alto para evitar confusion con sombras y porosidad")
-    t_spalling = st.slider("Desprendimiento (Spalling)", min_value=0.05, max_value=0.90, value=0.70, step=0.01,
-                          help="Umbral alto para filtrar textura rugosa natural")
-    
+
+    # Valores optimos recomendados para Sillar (por defecto)
+    REC_CRACK = 0.20
+    REC_HUMIDITY = 0.50
+    REC_SPALLING = 0.60
+    REC_IOU = 0.45
+
+    # Boton de restauracion de calibracion recomendada
+    if st.button("↺ Restaurar calibracion recomendada", use_container_width=True):
+        st.session_state.t_crack = REC_CRACK
+        st.session_state.t_humidity = REC_HUMIDITY
+        st.session_state.t_spalling = REC_SPALLING
+        st.session_state.t_iou = REC_IOU
+        st.success("Calibracion restablecida a los valores optimos para sillar.")
+
+    t_crack = st.slider("Grietas (Crack)", min_value=0.05, max_value=0.90,
+                        value=st.session_state.get("t_crack", REC_CRACK), step=0.01,
+                        help="Umbral bajo para capturar fisuras delgadas en sillar",
+                        key="t_crack")
+    t_humidity = st.slider("Humedad (Humidity)", min_value=0.05, max_value=0.90,
+                           value=st.session_state.get("t_humidity", REC_HUMIDITY), step=0.01,
+                           help="Umbral medio para evitar confusion con sombras y porosidad",
+                           key="t_humidity")
+    t_spalling = st.slider("Desprendimiento (Spalling)", min_value=0.05, max_value=0.90,
+                           value=st.session_state.get("t_spalling", REC_SPALLING), step=0.01,
+                           help="Umbral medio para filtrar textura rugosa natural",
+                           key="t_spalling")
+
     class_thresholds = {"crack": t_crack, "humidity": t_humidity, "spalling": t_spalling}
-    iou_threshold = st.slider("IoU Threshold", min_value=0.1, max_value=0.9, value=0.45, step=0.05)
+    iou_threshold = st.slider("IoU Threshold", min_value=0.1, max_value=0.9,
+                              value=st.session_state.get("t_iou", REC_IOU), step=0.05,
+                              key="t_iou")
     cm_per_pixel = st.number_input("GSD (cm/pixel)", min_value=0.01, max_value=1.0, value=0.13, step=0.01)
     
     st.markdown("### Micro-inferencia")
@@ -1748,11 +1770,25 @@ if page == "Analisis en Campo":
     """, unsafe_allow_html=True)
     
     uploaded_files = st.file_uploader(
-        "Cargar imagenes del monumento (JPG, PNG, WEBP)",
+        "Cargar imagenes del monumento (JPG, PNG, WEBP) - max 20 MB por imagen",
         type=["jpg", "jpeg", "png", "webp"],
         accept_multiple_files=True,
         key=f"uploader_main_{st.session_state.uploader_key}"
     )
+
+    # Limite de tamano por imagen (20 MB) para evitar colapsos por memoria
+    MAX_IMAGE_MB = 20
+    if uploaded_files:
+        oversized = [f.name for f in uploaded_files if f.size > MAX_IMAGE_MB * 1024 * 1024]
+        if oversized:
+            st.error(f"""
+            ### ⛔ IMAGEN(ES) DEMASIADO GRANDE(S)
+            El peso maximo por imagen es de **{MAX_IMAGE_MB} MB**.
+            Archivo(s) excedido(s): {', '.join(oversized)}
+            
+            Por favor, reduce el tamano o comprime las imagenes y vuelve a cargarlas.
+            """)
+            st.stop()
     
     if uploaded_files:
         # VALIDACION DE DUPLICADOS INMEDIATA

@@ -733,7 +733,7 @@ class HeritageDetectorDesktop(ctk.CTk):
         self.all_results = []
         self.current_view_index = 0
         
-        self.class_thresholds = {"crack": 0.15, "humidity": 0.60, "spalling": 0.70}
+        self.class_thresholds = {"crack": 0.20, "humidity": 0.50, "spalling": 0.60}
         self.iou_threshold = 0.45
         self.cm_per_pixel = 0.13
         self.use_tiling = True
@@ -897,23 +897,23 @@ class HeritageDetectorDesktop(ctk.CTk):
         
         ctk.CTkLabel(scroll, text="Grietas (Crack):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
         self.slider_crack = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.update_label(self.lbl_crack, v))
-        self.slider_crack.set(0.15)
+        self.slider_crack.set(0.20)
         self.slider_crack.pack(fill="x", pady=2)
-        self.lbl_crack = ctk.CTkLabel(scroll, text="15%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["crack"])
+        self.lbl_crack = ctk.CTkLabel(scroll, text="20%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["crack"])
         self.lbl_crack.pack()
         
         ctk.CTkLabel(scroll, text="Humedad (Humidity):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
         self.slider_humidity = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.update_label(self.lbl_humidity, v))
-        self.slider_humidity.set(0.60)
+        self.slider_humidity.set(0.50)
         self.slider_humidity.pack(fill="x", pady=2)
-        self.lbl_humidity = ctk.CTkLabel(scroll, text="60%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["humidity"])
+        self.lbl_humidity = ctk.CTkLabel(scroll, text="50%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["humidity"])
         self.lbl_humidity.pack()
         
         ctk.CTkLabel(scroll, text="Desprendimiento (Spalling):", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
         self.slider_spalling = ctk.CTkSlider(scroll, from_=0.05, to=0.90, number_of_steps=17, command=lambda v: self.update_label(self.lbl_spalling, v))
-        self.slider_spalling.set(0.70)
+        self.slider_spalling.set(0.60)
         self.slider_spalling.pack(fill="x", pady=2)
-        self.lbl_spalling = ctk.CTkLabel(scroll, text="70%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["spalling"])
+        self.lbl_spalling = ctk.CTkLabel(scroll, text="60%", font=(FONT_FAMILY, 9, "bold"), text_color=COLORS["spalling"])
         self.lbl_spalling.pack()
         
         ctk.CTkLabel(scroll, text="IoU Threshold:", font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], anchor="w").pack(fill="x", pady=(5, 0))
@@ -927,6 +927,13 @@ class HeritageDetectorDesktop(ctk.CTk):
         self.entry_gsd = ctk.CTkEntry(scroll, width=100, font=(FONT_FAMILY, 11), fg_color=COLORS["bg_surface"], border_color=COLORS["border"], text_color=COLORS["text_primary"])
         self.entry_gsd.insert(0, "0.13")
         self.entry_gsd.pack(pady=2)
+        
+        ctk.CTkButton(
+            scroll, text="↺ Restaurar calibración recomendada",
+            command=self.restore_recommended_calibration,
+            font=(FONT_FAMILY, 10, "bold"),
+            fg_color=COLORS["primary"], hover_color=COLORS["primary_hover"], height=28
+        ).pack(fill="x", pady=(8, 2))
         
         separator2 = ctk.CTkFrame(scroll, height=2, fg_color=COLORS["accent_gold"], corner_radius=1)
         separator2.pack(fill="x", pady=8)
@@ -1190,6 +1197,18 @@ class HeritageDetectorDesktop(ctk.CTk):
     
     def toggle_tiling(self):
         self.use_tiling = self.chk_tiling.get()
+
+    def restore_recommended_calibration(self):
+        """Restaura la calibracion optima recomendada para sillar."""
+        self.slider_crack.set(0.20)
+        self.slider_humidity.set(0.50)
+        self.slider_spalling.set(0.60)
+        self.slider_iou.set(0.45)
+        self.update_label(self.lbl_crack, 0.20)
+        self.update_label(self.lbl_humidity, 0.50)
+        self.update_label(self.lbl_spalling, 0.60)
+        self.update_label(self.lbl_iou, 0.45)
+        messagebox.showinfo("Calibración", "Calibración restablecida a los valores óptimos recomendados para sillar (Crack 20%, Humedad 50%, Desprendimiento 60%).")
     
     def load_image(self):
         file_paths = filedialog.askopenfilenames(
@@ -1201,6 +1220,17 @@ class HeritageDetectorDesktop(ctk.CTk):
         )
         
         if not file_paths:
+            return
+        
+        # Limite de tamano por imagen (20 MB)
+        MAX_IMAGE_MB = 20
+        oversized = [os.path.basename(fp) for fp in file_paths if os.path.getsize(fp) > MAX_IMAGE_MB * 1024 * 1024]
+        if oversized:
+            messagebox.showerror(
+                "Imagenes Demasiado Grandes",
+                f"El peso maximo por imagen es de {MAX_IMAGE_MB} MB.\n\n"
+                f"Archivo(s) excedido(s):\n{chr(10).join(oversized)}"
+            )
             return
         
         filenames = [os.path.basename(fp) for fp in file_paths]
