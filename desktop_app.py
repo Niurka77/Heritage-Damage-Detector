@@ -25,6 +25,7 @@ import os
 import sys
 import json
 import re
+import io
 import time
 import torch
 import requests
@@ -203,6 +204,23 @@ class SupabaseClient:
         except Exception as e:
             return {"data": None, "error": "Error de conexión con Supabase", "success": False, "status": 0}
     
+    def upload_image(self, bucket: str, path: str, data) -> dict:
+        """Sube un archivo (bytes) a Supabase Storage y devuelve la URL publica."""
+        try:
+            headers = {**self.headers, "Content-Type": "application/octet-stream"}
+            r = requests.post(
+                f"{self.url}/storage/v1/object/{bucket}/{path}",
+                headers=headers,
+                data=data,
+                timeout=30,
+            )
+            if r.status_code in (200, 201):
+                public_url = f"{self.url}/storage/v1/object/public/{bucket}/{path}"
+                return {"success": True, "url": public_url, "status": r.status_code}
+            return {"success": False, "error": f"Error HTTP {r.status_code} al subir imagen", "url": None, "status": r.status_code}
+        except Exception as e:
+            return {"success": False, "error": "Error de conexión al subir imagen", "url": None, "status": 0}
+    
     def select(self, table: str, query: str = "*", order: str = None, 
                limit: int = None, filters: dict = None) -> dict:
         try:
@@ -272,9 +290,47 @@ class SupabaseClient:
             print(f"Error verificando duplicados: {e}")
             return {"duplicates": [], "new_files": filenames}
     
+    def _upload_inspection_images(self, result, filename):
+        """Sube la imagen original y la anotada a Storage.
+        Devuelve dict con 'original' y 'anotada' (URLs publicas o None)."""
+        try:
+            base = os.path.splitext(str(filename))[0]
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe = re.sub(r"[^\w\-]+", "_", base)[:60] or "inspeccion"
+
+            img_urls = {"original": None, "anotada": None}
+
+            # 1) Imagen anotada (desde el array numpy RGB -> JPG en memoria)
+            if result.get("annotated_image") is not None:
+                img_bgr = cv2.cvtColor(result["annotated_image"], cv2.COLOR_RGB2BGR)
+                ok_enc, buf = cv2.imencode(".jpg", img_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+                if ok_enc:
+                    path = f"{safe}_{ts}_anotada.jpg"
+                    resp = self.upload_image("inspecciones", path, buf.tobytes())
+                    if resp["success"]:
+                        img_urls["anotada"] = resp["url"]
+
+            # 2) Imagen original limpia (desde la ruta local)
+            orig_path = result.get("image_path")
+            if orig_path and os.path.exists(orig_path):
+                with open(orig_path, "rb") as f:
+                    data = f.read()
+                path = f"{safe}_{ts}_original.jpg"
+                resp = self.upload_image("inspecciones", path, data)
+                if resp["success"]:
+                    img_urls["original"] = resp["url"]
+
+            return img_urls
+        except Exception as e:
+            print(f"Error subiendo imagenes: {e}")
+            return {"original": None, "anotada": None}
+
     def save_inspection(self, result, filename):
         inspection_id = None
         try:
+            # Subir las imagenes (original y anotada) a Storage para el historial
+            image_urls = self._upload_inspection_images(result, filename)
+
             inspection_payload = {
                 "filename": str(filename),
                 "crack_count": int(result["class_counts"].get("crack", 0)),
@@ -284,6 +340,8 @@ class SupabaseClient:
                 "total_area_cm2": float(result["total_area_cm2"]),
                 "total_area_m2": float(result["total_area_m2"]),
                 "avg_confidence": float(result.get("avg_confidence", 0)),
+                "imagen_original_url": image_urls["original"],
+                "imagen_anotada_url": image_urls["anotada"],
             }
             
             resp = self.insert("inspection_results", inspection_payload)
@@ -1989,7 +2047,8 @@ class HeritageDetectorDesktop(ctk.CTk):
         table_frame = ctk.CTkFrame(content, fg_color=COLORS["bg_card"], corner_radius=12, border_width=1, border_color=COLORS["border"])
         table_frame.pack(fill="both", expand=True, pady=10)
         
-        ctk.CTkLabel(table_frame, text="Tabla de Inspecciones", font=(FONT_FAMILY, 14, "bold"), text_color=COLORS["text_primary"]).pack(pady=(12, 8), padx=15, anchor="w")
+        ctk.CTkLabel(table_frame, text="Tabla de Inspecciones", font=(FONT_FAMILY, 14, "bold"), text_color=COLORS["text_primary"]).pack(pady=(12, 2), padx=15, anchor="w")
+        ctk.CTkLabel(table_frame, text="PISTA: Haz clic en cualquier fila para ver la imagen ANTES / DESPUÉS (original y con detecciones)", font=(FONT_FAMILY, 10, "italic"), text_color=COLORS["accent_gold"]).pack(pady=(0, 8), padx=15, anchor="w")
         
         scroll_frame = ctk.CTkScrollableFrame(table_frame, fg_color="transparent", width=1000)
         scroll_frame.pack(fill="x", padx=15, pady=(0, 12))
@@ -2005,7 +2064,7 @@ class HeritageDetectorDesktop(ctk.CTk):
         
         for idx, (_, row) in enumerate(df.iterrows()):
             row_color = COLORS["bg_surface"] if idx % 2 == 0 else COLORS["bg_card"]
-            row_frame = ctk.CTkFrame(scroll_frame, fg_color=row_color, corner_radius=4, height=36)
+            row_frame = ctk.CTkFrame(scroll_frame, fg_color=row_color, corner_radius=4, height=36, cursor="hand2")
             row_frame.pack(fill="x", pady=2)
             
             created_at = row.get("created_at", "")
@@ -2027,8 +2086,18 @@ class HeritageDetectorDesktop(ctk.CTk):
                 f"{row.get('avg_confidence', 0):.1f}"
             ]
             
+            row_labels = []
             for i, (val, w) in enumerate(zip(values, col_widths)):
-                ctk.CTkLabel(row_frame, text=val, font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], width=w, anchor="w", justify="left").pack(side="left", padx=(0 if i == 0 else 2, 2), pady=4)
+                lbl = ctk.CTkLabel(row_frame, text=val, font=(FONT_FAMILY, 10), text_color=COLORS["text_primary"], width=w, anchor="w", justify="left", cursor="hand2")
+                lbl.pack(side="left", padx=(0 if i == 0 else 2, 2), pady=4)
+                row_labels.append(lbl)
+
+            # Fila clicable -> abrir vista antes/después
+            def _on_click_row(e, r=row):
+                self._open_inspeccion_images(r)
+            row_frame.bind("<Button-1>", _on_click_row)
+            for lbl in row_labels:
+                lbl.bind("<Button-1>", _on_click_row)
         
         btn_frame = ctk.CTkFrame(content, fg_color="transparent")
         btn_frame.pack(fill="x", pady=10)
@@ -2058,6 +2127,101 @@ class HeritageDetectorDesktop(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
     
+    def _download_image_to_tk(self, url, max_width=420, max_height=520):
+        """Descarga una imagen de una URL publica y la convierte a PhotoImage escalado."""
+        try:
+            r = requests.get(url, timeout=30)
+            if r.status_code != 200:
+                return None
+            img = Image.open(io.BytesIO(r.content))
+            img.thumbnail((max_width, max_height), Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(img)
+        except Exception as e:
+            print(f"Error descargando imagen {url}: {e}")
+            return None
+
+    def _open_inspeccion_images(self, row):
+        """Abre una ventana con la imagen original y la anotada (antes/despues)."""
+        original_url = row.get("imagen_original_url")
+        anotada_url = row.get("imagen_anotada_url")
+
+        if not original_url and not anotada_url:
+            messagebox.showinfo(
+                "Sin imágenes",
+                "Esta inspección no tiene imágenes guardadas.\n\n"
+                "Solo las inspecciones guardadas a partir de ahora incluyen las imágenes\n"
+                "para la vista ANTES / DESPUÉS."
+            )
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title(f"Inspección: {row.get('filename', '')}")
+        win.geometry("980x680")
+        win.transient(self)
+        win.grab_set()
+
+        content = ctk.CTkScrollableFrame(win, fg_color=COLORS["bg_secondary"])
+        content.pack(fill="both", expand=True, padx=15, pady=15)
+
+        ctk.CTkLabel(
+            content,
+            text=f"Inspección: {row.get('filename', '—')}",
+            font=(FONT_FAMILY, 16, "bold"),
+            text_color=COLORS["accent_gold"]
+        ).pack(pady=(5, 2))
+
+        created_at = row.get("created_at", "")
+        if created_at:
+            try:
+                dt = datetime.fromisoformat(str(created_at).replace('Z', '+00:00'))
+                created_at = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                created_at = "—"
+        ctk.CTkLabel(
+            content,
+            text=f"Fecha: {created_at}  |  Detecciones: {row.get('total_detections', 0)}  |  "
+                 f"Grietas: {row.get('crack_count', 0)}  Humedad: {row.get('humidity_count', 0)}  "
+                 f"Despr.: {row.get('spalling_count', 0)}  |  Área: {row.get('total_area_m2', 0):.4f} m²  |  "
+                 f"Conf.: {row.get('avg_confidence', 0):.1f}%",
+            font=(FONT_FAMILY, 11),
+            text_color=COLORS["text_secondary"]
+        ).pack(pady=(0, 12))
+
+        # Panel con ambas imagenes lado a lado
+        images_frame = ctk.CTkFrame(content, fg_color="transparent")
+        images_frame.pack(fill="both", expand=True)
+
+        # Variable para mantener referencias a las imagenes (evitar GC)
+        keep = []
+
+        def _build_panel(parent, url, titulo, color):
+            panel = ctk.CTkFrame(parent, fg_color=COLORS["bg_card"], corner_radius=12,
+                                 border_width=1, border_color=COLORS["border"])
+            panel.pack(side="left", fill="both", expand=True, padx=6, pady=6)
+            ctk.CTkLabel(panel, text=titulo, font=(FONT_FAMILY, 12, "bold"),
+                         text_color=color).pack(pady=(12, 6))
+            if not url:
+                ctk.CTkLabel(panel, text="Imagen no disponible", font=(FONT_FAMILY, 11),
+                             text_color=COLORS["text_muted"]).pack(pady=40)
+                return
+            img = self._download_image_to_tk(url)
+            if img is None:
+                ctk.CTkLabel(panel, text="No se pudo cargar la imagen", font=(FONT_FAMILY, 11),
+                             text_color=COLORS["text_muted"]).pack(pady=40)
+                return
+            keep.append(img)
+            img_lbl = ctk.CTkLabel(panel, image=img, text="")
+            img_lbl.pack(padx=12, pady=(0, 12))
+
+        _build_panel(images_frame, original_url, "ANTES - Imagen Original", COLORS["text_primary"])
+        _build_panel(images_frame, anotada_url, "DESPUÉS - Con Detecciones", COLORS["success"])
+
+        ctk.CTkButton(
+            content, text="Cerrar", command=win.destroy,
+            font=(FONT_FAMILY, 11, "bold"), fg_color=COLORS["primary"],
+            hover_color=COLORS["primary_hover"], width=120, height=36
+        ).pack(pady=12)
+
     def show_module_especificacion(self):
         header = ctk.CTkFrame(self.content, fg_color=COLORS["bg_secondary"], height=90, corner_radius=8)
         header.pack(fill="x", padx=15, pady=(15, 5))
