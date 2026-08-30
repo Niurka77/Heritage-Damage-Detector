@@ -138,11 +138,16 @@ class SupabaseClient:
     
     def __init__(self, url: str, key: str):
         self.url = url.rstrip("/")
+        # Las nuevas publishable/secret keys (sb_publishable_/sb_secret_) se
+        # envian SOLO en el header 'apikey'. El header 'Authorization: Bearer'
+        # queda reservado para JWTs (legacy anon/service_role).
+        is_jwt = not key.startswith("sb_publishable_") and not key.startswith("sb_secret_")
         self.headers = {
             "apikey": key,
-            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
+        if is_jwt:
+            self.headers["Authorization"] = f"Bearer {key}"
     
     def ping(self) -> tuple:
         try:
